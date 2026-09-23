@@ -1,0 +1,861 @@
+// BuildFlow — Prisma schema
+// Multi-tenant construction management SaaS
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// ENUMS
+// ─────────────────────────────────────────────
+
+enum RoleName {
+  OWNER
+  PROJECT_MANAGER
+  SITE_SUPERVISOR
+  ACCOUNTANT
+  WORKER
+  CLIENT
+}
+
+enum ProjectStatus {
+  PLANNING
+  ACTIVE
+  ON_HOLD
+  DELAYED
+  COMPLETED
+  CANCELLED
+}
+
+enum ProjectType {
+  RESIDENTIAL
+  COMMERCIAL
+  RENOVATION
+  INFRASTRUCTURE
+  OTHER
+}
+
+enum PhaseStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  DELAYED
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  BLOCKED
+  COMPLETED
+}
+
+enum TaskPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+enum MilestoneStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  OVERDUE
+}
+
+enum EmploymentStatus {
+  ACTIVE
+  INACTIVE
+  ON_LEAVE
+  TERMINATED
+}
+
+enum InventoryTxnType {
+  PURCHASE
+  USED
+  RETURNED
+  DAMAGED
+  ADJUSTMENT
+  TRANSFER
+}
+
+enum EquipmentStatus {
+  AVAILABLE
+  IN_USE
+  MAINTENANCE
+  OUT_OF_SERVICE
+}
+
+enum EstimateStatus {
+  DRAFT
+  SENT
+  APPROVED
+  REJECTED
+  EXPIRED
+}
+
+enum ExpenseCategory {
+  MATERIALS
+  LABOR
+  EQUIPMENT
+  TRANSPORT
+  SUBCONTRACTOR
+  UTILITIES
+  OTHER
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  BANK_TRANSFER
+  OTHER
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+enum DocumentCategory {
+  CONTRACT
+  PLAN
+  RECEIPT
+  PERMIT
+  REPORT
+  PHOTO
+  OTHER
+}
+
+enum NotificationType {
+  TASK_OVERDUE
+  MILESTONE_APPROACHING
+  PROJECT_DELAYED
+  MATERIAL_LOW_STOCK
+  BUDGET_THRESHOLD
+  INVOICE_OVERDUE
+  PAYMENT_RECEIVED
+  CLIENT_MESSAGE
+  DOCUMENT_UPLOADED
+}
+
+enum SubscriptionPlan {
+  STARTER
+  PROFESSIONAL
+  BUSINESS
+}
+
+// ─────────────────────────────────────────────
+// CORE / TENANCY
+// ─────────────────────────────────────────────
+
+model Organization {
+  id            String   @id @default(uuid())
+  name          String
+  logoUrl       String?
+  phone         String?
+  email         String?
+  address       String?
+  currency      String   @default("USD")
+  taxRate       Decimal? @db.Decimal(5, 2)
+  businessHours String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  users         User[]
+  roles         Role[]
+  clients       Client[]
+  projects      Project[]
+  workers       Worker[]
+  teams         Team[]
+  materials     Material[]
+  suppliers     Supplier[]
+  equipment     Equipment[]
+  estimates     Estimate[]
+  expenses      Expense[]
+  invoices      Invoice[]
+  payments      Payment[]
+  documents     Document[]
+  notifications Notification[]
+  auditLogs     AuditLog[]
+  subscription  Subscription?
+
+  @@index([name])
+}
+
+model Role {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           RoleName
+  permissions    Json // fine-grained permission overrides on top of RoleName defaults
+
+  users User[]
+
+  @@unique([organizationId, name])
+}
+
+model User {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  roleId         String
+  role           Role         @relation(fields: [roleId], references: [id])
+
+  fullName     String
+  email        String
+  passwordHash String
+  phone        String?
+  isActive     Boolean  @default(true)
+
+  // If this user is also a Worker or represents a Client contact
+  workerId String? @unique
+  worker   Worker? @relation(fields: [workerId], references: [id])
+  clientId String?
+  client   Client? @relation(fields: [clientId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  projectsManaged   Project[]      @relation("ProjectManager")
+  tasksCreated      Task[]         @relation("TaskCreatedBy")
+  auditLogs         AuditLog[]
+  notifications     Notification[]
+  siteReports       DailySiteReport[]
+  inventoryTxns     InventoryTransaction[]
+  documentsUploaded Document[]
+  refreshTokens     RefreshToken[]
+
+  @@unique([organizationId, email])
+  @@index([email])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  tokenHash String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  revokedAt DateTime?
+
+  @@index([userId])
+}
+
+model AuditLog {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userId         String?
+  user           User?        @relation(fields: [userId], references: [id])
+  action         String
+  entityType     String
+  entityId       String?
+  metadata       Json?
+  createdAt      DateTime     @default(now())
+
+  @@index([organizationId, entityType, entityId])
+  @@index([organizationId, createdAt])
+}
+
+// ─────────────────────────────────────────────
+// CLIENTS
+// ─────────────────────────────────────────────
+
+model Client {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  name          String
+  contactPerson String?
+  phone         String?
+  email         String?
+  address       String?
+  clientType    String? // individual / company
+  notes         String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  deletedAt     DateTime?
+
+  users     User[]
+  projects  Project[]
+  estimates Estimate[]
+  invoices  Invoice[]
+  documents Document[]
+
+  @@index([organizationId, name])
+  @@index([organizationId, phone])
+}
+
+// ─────────────────────────────────────────────
+// PROJECTS
+// ─────────────────────────────────────────────
+
+model Project {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  projectNumber String
+  name          String
+  clientId      String
+  client        Client        @relation(fields: [clientId], references: [id])
+  type          ProjectType   @default(OTHER)
+  siteAddress   String?
+  startDate     DateTime?
+  expectedCompletionDate DateTime?
+  actualCompletionDate   DateTime?
+  projectManagerId String?
+  projectManager    User?   @relation("ProjectManager", fields: [projectManagerId], references: [id])
+  budgetTotal   Decimal?      @db.Decimal(14, 2)
+  status        ProjectStatus @default(PLANNING)
+  description   String?
+  notes         String?
+  progressPct   Int           @default(0) // manual override; else derived from phases/tasks
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  deletedAt DateTime?
+
+  phases        ProjectPhase[]
+  milestones    Milestone[]
+  tasks         Task[]
+  workerAssign  WorkerAssignment[]
+  equipmentAssign EquipmentAssignment[]
+  estimates     Estimate[]
+  budgetItems   BudgetItem[]
+  expenses      Expense[]
+  siteReports   DailySiteReport[]
+  documents     Document[]
+  photos        ProjectPhoto[]
+  invoices      Invoice[]
+  inventoryTxns InventoryTransaction[]
+
+  @@unique([organizationId, projectNumber])
+  @@index([organizationId, status])
+}
+
+model ProjectPhase {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id])
+
+  name         String
+  orderIndex   Int
+  startDate    DateTime?
+  endDate      DateTime?
+  status       PhaseStatus @default(PLANNED)
+  progressPct  Int         @default(0)
+  responsibleId String?
+
+  tasks Task[]
+
+  @@index([projectId, orderIndex])
+}
+
+model Milestone {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id])
+
+  name           String
+  targetDate     DateTime?
+  completionDate DateTime?
+  status         MilestoneStatus @default(PENDING)
+  responsibleId  String?
+  notes          String?
+
+  @@index([projectId, status])
+}
+
+model Task {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id])
+  phaseId   String?
+  phase     ProjectPhase? @relation(fields: [phaseId], references: [id])
+
+  name           String
+  description    String?
+  assignedTeamId String?
+  team           Team?    @relation(fields: [assignedTeamId], references: [id])
+  priority       TaskPriority @default(MEDIUM)
+  startDate      DateTime?
+  dueDate        DateTime?
+  status         TaskStatus   @default(TODO)
+  progressPct    Int          @default(0)
+  estimatedHours Decimal?     @db.Decimal(6, 2)
+  actualHours    Decimal?     @db.Decimal(6, 2)
+  notes          String?
+
+  createdById String
+  createdBy   User   @relation("TaskCreatedBy", fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  assignments WorkerAssignment[]
+
+  @@index([projectId, status])
+  @@index([dueDate])
+}
+
+// ─────────────────────────────────────────────
+// WORKERS & TEAMS
+// ─────────────────────────────────────────────
+
+model Worker {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  name             String
+  phone            String?
+  email            String?
+  role             String? // job title
+  skill            String? // Mason, Electrician, etc.
+  employmentStatus EmploymentStatus @default(ACTIVE)
+  notes            String?
+
+  user        User?
+  teams       TeamMember[]
+  assignments WorkerAssignment[]
+
+  @@index([organizationId, skill])
+}
+
+model Team {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  name           String
+
+  members TeamMember[]
+  tasks   Task[]
+
+  @@index([organizationId])
+}
+
+model TeamMember {
+  id       String @id @default(uuid())
+  teamId   String
+  team     Team   @relation(fields: [teamId], references: [id])
+  workerId String
+  worker   Worker @relation(fields: [workerId], references: [id])
+
+  @@unique([teamId, workerId])
+}
+
+model WorkerAssignment {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id])
+  workerId  String
+  worker    Worker   @relation(fields: [workerId], references: [id])
+  taskId    String?
+  task      Task?    @relation(fields: [taskId], references: [id])
+  phaseId   String?
+
+  startDate     DateTime?
+  endDate       DateTime?
+  assignedHours Decimal?  @db.Decimal(6, 2)
+
+  @@index([projectId, workerId])
+  @@index([workerId, startDate, endDate])
+}
+
+// ─────────────────────────────────────────────
+// MATERIALS & INVENTORY
+// ─────────────────────────────────────────────
+
+model Material {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  name         String
+  sku          String
+  category     String?
+  unit         String
+  supplierId   String?
+  supplier     Supplier? @relation(fields: [supplierId], references: [id])
+  cost         Decimal   @db.Decimal(12, 2)
+  chargePrice  Decimal?  @db.Decimal(12, 2)
+  currentStock Decimal   @default(0) @db.Decimal(12, 2)
+  minStock     Decimal   @default(0) @db.Decimal(12, 2)
+  storageLocation String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  inventoryTxns InventoryTransaction[]
+  purchases     MaterialPurchase[]
+
+  @@unique([organizationId, sku])
+  @@index([organizationId, name])
+}
+
+model InventoryTransaction {
+  id         String   @id @default(uuid())
+  materialId String
+  material   Material @relation(fields: [materialId], references: [id])
+  type       InventoryTxnType
+  quantity   Decimal  @db.Decimal(12, 2)
+  unit       String
+  projectId  String?
+  project    Project? @relation(fields: [projectId], references: [id])
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  reference  String?
+  notes      String?
+  createdAt  DateTime @default(now())
+
+  @@index([materialId, createdAt])
+  @@index([projectId])
+}
+
+model Supplier {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  companyName   String
+  contactPerson String?
+  phone         String?
+  email         String?
+  address       String?
+  notes         String?
+
+  materials Material[]
+  purchases MaterialPurchase[]
+
+  @@index([organizationId, companyName])
+}
+
+model MaterialPurchase {
+  id         String   @id @default(uuid())
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  materialId String
+  material   Material @relation(fields: [materialId], references: [id])
+  quantity   Decimal  @db.Decimal(12, 2)
+  unitCost   Decimal  @db.Decimal(12, 2)
+  totalCost  Decimal  @db.Decimal(14, 2)
+  purchaseDate DateTime @default(now())
+
+  @@index([supplierId, purchaseDate])
+}
+
+// ─────────────────────────────────────────────
+// EQUIPMENT
+// ─────────────────────────────────────────────
+
+model Equipment {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  name            String
+  assetNumber     String
+  type            String?
+  status          EquipmentStatus @default(AVAILABLE)
+  location        String?
+  purchaseDate    DateTime?
+  maintenanceDate DateTime?
+  notes           String?
+
+  assignments EquipmentAssignment[]
+
+  @@unique([organizationId, assetNumber])
+}
+
+model EquipmentAssignment {
+  id          String    @id @default(uuid())
+  equipmentId String
+  equipment   Equipment @relation(fields: [equipmentId], references: [id])
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id])
+  startDate   DateTime?
+  endDate     DateTime?
+
+  @@index([projectId])
+}
+
+// ─────────────────────────────────────────────
+// ESTIMATES & BUDGET
+// ─────────────────────────────────────────────
+
+model Estimate {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  clientId       String
+  client         Client       @relation(fields: [clientId], references: [id])
+  projectId      String?
+  project        Project?     @relation(fields: [projectId], references: [id])
+
+  estimateNumber String
+  status         EstimateStatus @default(DRAFT)
+  subtotal       Decimal        @default(0) @db.Decimal(14, 2)
+  discount       Decimal        @default(0) @db.Decimal(14, 2)
+  tax            Decimal        @default(0) @db.Decimal(14, 2)
+  total          Decimal        @default(0) @db.Decimal(14, 2)
+  validUntil     DateTime?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  items EstimateItem[]
+
+  @@unique([organizationId, estimateNumber])
+}
+
+model EstimateItem {
+  id         String   @id @default(uuid())
+  estimateId String
+  estimate   Estimate @relation(fields: [estimateId], references: [id])
+
+  category    String // labor / material / other
+  description String
+  quantity    Decimal  @db.Decimal(12, 2)
+  unitCost    Decimal  @db.Decimal(12, 2)
+  total       Decimal  @db.Decimal(14, 2)
+
+  @@index([estimateId])
+}
+
+model Budget {
+  id        String  @id @default(uuid())
+  projectId String  @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  items BudgetItem[]
+}
+
+model BudgetItem {
+  id        String  @id @default(uuid())
+  budgetId  String
+  budget    Budget  @relation(fields: [budgetId], references: [id])
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id])
+
+  category     ExpenseCategory
+  budgetAmount Decimal @db.Decimal(14, 2)
+
+  @@index([projectId, category])
+}
+
+// ─────────────────────────────────────────────
+// EXPENSES
+// ─────────────────────────────────────────────
+
+model Expense {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  projectId      String
+  project        Project      @relation(fields: [projectId], references: [id])
+
+  category      ExpenseCategory
+  amount        Decimal       @db.Decimal(14, 2)
+  date          DateTime
+  vendor        String?
+  paymentMethod PaymentMethod?
+  receiptUrl    String?
+  description   String?
+  createdAt     DateTime @default(now())
+
+  @@index([projectId, category])
+  @@index([organizationId, date])
+}
+
+// ─────────────────────────────────────────────
+// DAILY SITE REPORTS
+// ─────────────────────────────────────────────
+
+model DailySiteReport {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id])
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+
+  date          DateTime
+  weather       String?
+  tasksCompleted String?
+  equipmentUsed String?
+  problems      String?
+  safetyNotes   String?
+  generalNotes  String?
+  progressPct   Int?
+
+  workers   SiteReportWorker[]
+  materials SiteReportMaterial[]
+  photos    ProjectPhoto[]
+
+  @@index([projectId, date])
+}
+
+model SiteReportWorker {
+  id         String          @id @default(uuid())
+  reportId   String
+  report     DailySiteReport @relation(fields: [reportId], references: [id])
+  workerId   String
+  hoursWorked Decimal?       @db.Decimal(6, 2)
+
+  @@index([reportId])
+}
+
+model SiteReportMaterial {
+  id         String          @id @default(uuid())
+  reportId   String
+  report     DailySiteReport @relation(fields: [reportId], references: [id])
+  materialId String
+  quantity   Decimal         @db.Decimal(12, 2)
+
+  @@index([reportId])
+}
+
+// ─────────────────────────────────────────────
+// DOCUMENTS & PHOTOS
+// ─────────────────────────────────────────────
+
+model Document {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  projectId      String?
+  project        Project?     @relation(fields: [projectId], references: [id])
+  clientId       String?
+  client         Client?      @relation(fields: [clientId], references: [id])
+
+  fileName    String
+  fileUrl     String
+  category    DocumentCategory @default(OTHER)
+  description String?
+  uploadedById String
+  uploadedBy   User @relation(fields: [uploadedById], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([organizationId, category])
+  @@index([projectId])
+}
+
+model ProjectPhoto {
+  id        String   @id @default(uuid())
+  projectId String
+  project   Project  @relation(fields: [projectId], references: [id])
+  reportId  String?
+  report    DailySiteReport? @relation(fields: [reportId], references: [id])
+
+  photoUrl    String
+  caption     String?
+  takenAt     DateTime @default(now())
+
+  @@index([projectId])
+}
+
+// ─────────────────────────────────────────────
+// INVOICES & PAYMENTS
+// ─────────────────────────────────────────────
+
+model Invoice {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  projectId      String
+  project        Project      @relation(fields: [projectId], references: [id])
+  clientId       String
+  client         Client       @relation(fields: [clientId], references: [id])
+
+  invoiceNumber String
+  invoiceDate   DateTime
+  dueDate       DateTime
+  subtotal      Decimal       @db.Decimal(14, 2)
+  discount      Decimal       @default(0) @db.Decimal(14, 2)
+  tax           Decimal       @default(0) @db.Decimal(14, 2)
+  total         Decimal       @db.Decimal(14, 2)
+  paidAmount    Decimal       @default(0) @db.Decimal(14, 2)
+  status        InvoiceStatus @default(DRAFT)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+
+  items    InvoiceItem[]
+  payments Payment[]
+
+  @@unique([organizationId, invoiceNumber])
+  @@index([organizationId, status])
+}
+
+model InvoiceItem {
+  id        String  @id @default(uuid())
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id])
+
+  description String
+  quantity    Decimal @db.Decimal(12, 2)
+  unitPrice   Decimal @db.Decimal(12, 2)
+  total       Decimal @db.Decimal(14, 2)
+
+  @@index([invoiceId])
+}
+
+model Payment {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  invoiceId      String
+  invoice        Invoice      @relation(fields: [invoiceId], references: [id])
+
+  amount    Decimal       @db.Decimal(14, 2)
+  method    PaymentMethod
+  date      DateTime      @default(now())
+  reference String?
+  notes     String?
+
+  @@index([invoiceId])
+  @@index([organizationId, date])
+}
+
+// ─────────────────────────────────────────────
+// NOTIFICATIONS
+// ─────────────────────────────────────────────
+
+model Notification {
+  id             String       @id @default(uuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id])
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+
+  type      NotificationType
+  message   String
+  entityId  String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId, isRead])
+}
+
+// ─────────────────────────────────────────────
+// SUBSCRIPTION
+// ─────────────────────────────────────────────
+
+model Subscription {
+  id             String       @id @default(uuid())
+  organizationId String       @unique
+  organization   Organization @relation(fields: [organizationId], references: [id])
+
+  plan          SubscriptionPlan @default(STARTER)
+  status        String           @default("active")
+  currentPeriodEnd DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
